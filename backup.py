@@ -146,6 +146,63 @@ class GoogleDriveUploader:
             sys.exit(1)
         return r.json()["access_token"]
 
+    def list_files(self):
+        headers = {"Authorization": f"Bearer {self.access_token}"}
+        query = f"'{self.config['folder_id']}' in parents and trashed=false"
+        params = {
+            "q": query,
+            "orderBy": "createdTime asc",
+            "fields": "files(id,name)",
+            "pageSize": self.config["max_files"],
+        }
+
+        r = requests.get(
+            "https://www.googleapis.com/drive/v3/files",
+            headers=headers,
+            params=params,
+        )
+
+        if r.status_code != 200:
+            send_discord(self.config, "list files failed")
+            sys.exit(1)
+
+        return r.json().get("files", [])
+
+    def delete_file(self, file_id):
+        headers = {"Authorization": f"Bearer {self.access_token}"}
+        r = requests.delete(
+            f"https://www.googleapis.com/drive/v3/files/{file_id}",
+            headers=headers,
+        )
+        if r.status_code != 204:
+            send_discord(self.config, "delete remote failed " + file_id)
+            sys.exit(1)
+        send_discord(self.config, "deleted remote " + file_id)
+
+    def rotate_files(self):
+        files = self.list_files()
+        if len(files) >= self.config["max_files"]:
+            self.delete_file(files[0]["id"])
+
+    def rotate_local(self):
+        local_dir = self.config["local_dir"]
+        if not os.path.exists(local_dir):
+            os.makedirs(local_dir)
+        files = sorted(os.listdir(local_dir), key=lambda x: os.path.getctime(os.path.join(local_dir, x)))
+        while len(files) >= self.config["max_files"]:
+            os.remove(os.path.join(local_dir, files[0]))
+            send_discord(self.config, "deleted local " + files[0])
+            files.pop(0)
+
+    def save_local(self, file_path):
+        local_dir = self.config["local_dir"]
+        _, ext = os.path.splitext(file_path)
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        new_filename = f"{timestamp}{ext}"
+        dest_path = os.path.join(local_dir, new_filename)
+        shutil.copy2(file_path, dest_path)
+        send_discord(self.config, "saved local " + new_filename)
+
     def dump_mysql(self):
         with tempfile.NamedTemporaryFile(mode='w+', suffix='.sql', delete=False) as temp_file:
             dump_path = temp_file.name
@@ -164,6 +221,30 @@ class GoogleDriveUploader:
             sys.exit(1)
         send_discord(self.config, "mysql dump success")
         return dump_path
+
+    def check_sql_integrity(self, dump_path):
+        temp_db = f"temp_check_{uuid.uuid4().hex[:8]}"
+        host = self.config["db_host"]
+        user = self.config["db_user"]
+        passwd = self.config["db_pass"]
+
+        create_cmd = ["mysql", "-h", host, "-u", user, f"-p{passwd}", "-e", f"CREATE DATABASE {temp_db};"]
+        result = subprocess.run(create_cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            send_discord(self.config, "temp db create failed")
+            return
+
+        import_cmd = ["mysql", "-h", host, "-u", user, f"-p{passwd}", temp_db]
+        with open(dump_path, 'r') as f:
+            result = subprocess.run(import_cmd, stdin=f, capture_output=True, text=True)
+        if result.returncode != 0:
+            send_discord(self.config, "sql integrity failed")
+            sys.exit(1)
+        else:
+            send_discord(self.config, "sql integrity ok")
+
+        drop_cmd = ["mysql", "-h", host, "-u", user, f"-p{passwd}", "-e", f"DROP DATABASE {temp_db};"]
+        subprocess.run(drop_cmd)
 
     def upload_file(self, file_path):
         headers = {"Authorization": f"Bearer {self.access_token}"}
@@ -202,7 +283,11 @@ class GoogleDriveUploader:
         send_discord(self.config, "backup job started")
         self.ensure_refresh_token()
         dump_path = self.dump_mysql()
+        self.check_sql_integrity(dump_path)
+        self.rotate_local()
+        self.save_local(dump_path)
         self.access_token = self.get_access_token()
+        self.rotate_files()
         self.upload_file(dump_path)
         os.unlink(dump_path)
         send_discord(self.config, "backup pipeline success")
