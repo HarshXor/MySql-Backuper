@@ -25,12 +25,31 @@ def save_config(cfg):
         json.dump(cfg, f, indent=4)
 
 
-def send_discord(cfg, msg):
+def send_discord(cfg, msg, status="info"):
     url = cfg.get("discord_webhook", "").strip()
     if not url:
         return
+    # format message with timestamp and a small icon for clarity
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    formatted = f":floppy_disk: **Backup** `{timestamp}` - {msg}"
+    # choose embed color based on status
+    colors = {
+        "info": 0x3498db,    # blue
+        "success": 0x2ecc71, # green
+        "failure": 0xe74c3c, # red
+    }
+    color = colors.get(status, colors["info"])
+
+    payload = {
+        "embeds": [
+            {
+                "description": formatted,
+                "color": color,
+            }
+        ]
+    }
     try:
-        requests.post(url, json={"content": msg}, timeout=10)
+        requests.post(url, json=payload, timeout=10)
     except:
         pass
 
@@ -78,7 +97,7 @@ class GoogleDriveUploader:
 
         save_config(cfg)
         print("[+] Config saved")
-        send_discord(cfg, "config initialized")
+        send_discord(cfg, "config initialized", "success")
         return cfg
 
     def save(self):
@@ -107,7 +126,7 @@ class GoogleDriveUploader:
             },
         )
         if r.status_code != 200:
-            send_discord(self.config, "auth exchange failed")
+            send_discord(self.config, "auth exchange failed", "failure")
             sys.exit(1)
         return r.json()
 
@@ -123,12 +142,12 @@ class GoogleDriveUploader:
 
         refresh_token = tokens.get("refresh_token")
         if not refresh_token:
-            send_discord(self.config, "no refresh token")
+            send_discord(self.config, "no refresh token", "failure")
             sys.exit(1)
 
         self.config["refresh_token"] = refresh_token
         self.save()
-        send_discord(self.config, "refresh token stored")
+        send_discord(self.config, "refresh token stored", "success")
         return refresh_token
 
     def get_access_token(self):
@@ -142,7 +161,7 @@ class GoogleDriveUploader:
             },
         )
         if r.status_code != 200:
-            send_discord(self.config, "access token failed")
+            send_discord(self.config, "access token failed", "failure")
             sys.exit(1)
         return r.json()["access_token"]
 
@@ -163,7 +182,7 @@ class GoogleDriveUploader:
         )
 
         if r.status_code != 200:
-            send_discord(self.config, "list files failed")
+            send_discord(self.config, "list files failed", "failure")
             sys.exit(1)
 
         return r.json().get("files", [])
@@ -175,9 +194,9 @@ class GoogleDriveUploader:
             headers=headers,
         )
         if r.status_code != 204:
-            send_discord(self.config, "delete remote failed " + file_id)
+            send_discord(self.config, "delete remote failed " + file_id, "failure")
             sys.exit(1)
-        send_discord(self.config, "deleted remote " + file_id)
+        send_discord(self.config, "deleted remote " + file_id, "success")
 
     def rotate_files(self):
         files = self.list_files()
@@ -191,7 +210,7 @@ class GoogleDriveUploader:
         files = sorted(os.listdir(local_dir), key=lambda x: os.path.getctime(os.path.join(local_dir, x)))
         while len(files) >= self.config["max_files"]:
             os.remove(os.path.join(local_dir, files[0]))
-            send_discord(self.config, "deleted local " + files[0])
+            send_discord(self.config, "deleted local " + files[0], "success")
             files.pop(0)
 
     def save_local(self, file_path):
@@ -201,7 +220,7 @@ class GoogleDriveUploader:
         new_filename = f"{timestamp}{ext}"
         dest_path = os.path.join(local_dir, new_filename)
         shutil.copy2(file_path, dest_path)
-        send_discord(self.config, "saved local " + new_filename)
+        send_discord(self.config, "saved local " + new_filename, "success")
 
     def dump_mysql(self):
         with tempfile.NamedTemporaryFile(mode='w+', suffix='.sql', delete=False) as temp_file:
@@ -216,10 +235,10 @@ class GoogleDriveUploader:
         with open(dump_path, 'w') as f:
             result = subprocess.run(cmd, stdout=f, stderr=subprocess.PIPE)
         if result.returncode != 0:
-            send_discord(self.config, "mysql dump failed")
+            send_discord(self.config, "mysql dump failed", "failure")
             os.unlink(dump_path)
             sys.exit(1)
-        send_discord(self.config, "mysql dump success")
+        send_discord(self.config, "mysql dump success", "success")
         return dump_path
 
     def check_sql_integrity(self, dump_path):
@@ -231,17 +250,17 @@ class GoogleDriveUploader:
         create_cmd = ["mysql", "-h", host, "-u", user, f"-p{passwd}", "-e", f"CREATE DATABASE {temp_db};"]
         result = subprocess.run(create_cmd, capture_output=True, text=True)
         if result.returncode != 0:
-            send_discord(self.config, "temp db create failed")
+            send_discord(self.config, "temp db create failed", "failure")
             return
 
         import_cmd = ["mysql", "-h", host, "-u", user, f"-p{passwd}", temp_db]
         with open(dump_path, 'r') as f:
             result = subprocess.run(import_cmd, stdin=f, capture_output=True, text=True)
         if result.returncode != 0:
-            send_discord(self.config, "sql integrity failed")
+            send_discord(self.config, "sql integrity failed", "failure")
             sys.exit(1)
         else:
-            send_discord(self.config, "sql integrity ok")
+            send_discord(self.config, "sql integrity ok", "success")
 
         drop_cmd = ["mysql", "-h", host, "-u", user, f"-p{passwd}", "-e", f"DROP DATABASE {temp_db};"]
         subprocess.run(drop_cmd)
@@ -274,13 +293,13 @@ class GoogleDriveUploader:
             )
 
         if r.status_code != 200:
-            send_discord(self.config, "upload failed")
+            send_discord(self.config, "upload failed", "failure")
             sys.exit(1)
 
-        send_discord(self.config, "upload success " + new_filename)
+        send_discord(self.config, "upload success " + new_filename, "success")
 
     def run(self):
-        send_discord(self.config, "backup job started")
+        send_discord(self.config, "backup job started", "info")
         self.ensure_refresh_token()
         dump_path = self.dump_mysql()
         self.check_sql_integrity(dump_path)
@@ -290,7 +309,7 @@ class GoogleDriveUploader:
         self.rotate_files()
         self.upload_file(dump_path)
         os.unlink(dump_path)
-        send_discord(self.config, "backup pipeline success")
+        send_discord(self.config, "backup pipeline success", "success")
 
 
 if __name__ == "__main__":

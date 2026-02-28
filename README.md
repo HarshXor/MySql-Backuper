@@ -27,10 +27,12 @@ Skrip Python kecil untuk melakukan dump MySQL, menyimpan cadangan ke folder loka
    python backup.py --client-id <CLIENT_ID> --client-secret <CLIENT_SECRET> \
      --folder-id <FOLDER_ID> --max-files 3 \
      --local-dir /path/to/local/backup \
-     --db-host localhost --db-user root --db-pass secret --db-name mydb
+     --db-host localhost --db-user root --db-pass secret --db-name mydb \
+     [--discord-webhook https://discord.com/api/webhooks/...]  # optional
    ```
    - `--folder-id` dapat diperoleh dari URL folder Google Drive (misal `https://drive.google.com/drive/folders/<ID>`).
-   - Script akan menyimpan konfigurasi di `google_api.json`.
+   - `--discord-webhook` adalah URL webhook Discord jika ingin menerima notifikasi.
+   - Script akan menyimpan konfigurasi di `config.json`.
    - Setelah menjalankan perintah di atas, ikuti instruksi untuk membuka URL dan memasukkan `authorization code`.
 
 3. **Menjalankan backup berkala**
@@ -45,12 +47,39 @@ Skrip Python kecil untuk melakukan dump MySQL, menyimpan cadangan ke folder loka
 - **Rotasi lokal**: Menjaga hanya `max-files` cadangan di folder lokal.
 - **Rotasi Google Drive**: Hapus file tertua jika jumlah file sudah mencapai `max-files`.
 - **Cek integritas**: Dump akan diimpor ke database sementara untuk memastikan tidak korup.
-- **Konfigurasi otomatis**: Semua pengaturan tersimpan di `google_api.json`.
+- **Konfigurasi otomatis**: Semua pengaturan tersimpan di `config.json`.
+- **Pemberitahuan Discord**: Bila `discord_webhook` diatur, semua event penting dikirim ke channel Discord dengan format yang bersih, mencantumkan waktu dan ikon.
+
+## Discord notifications
+
+Jika Anda menyediakan `--discord-webhook` saat setup, script akan mengirim pesan setiap tahap penting ke channel Discord dengan menggunakan *embed*.
+Embed ini menampilkan:
+
+- ikon dan timestamp di deskripsi
+- warna border di sisi kiri
+
+Warna akan menyesuaikan berdasarkan status pesan:
+
+| Status   | Warna    | Keterangan       |
+|----------|----------|------------------|
+| info     | biru     | awal/biasa       |
+| success  | hijau    | operasi sukses   |
+| failure  | merah    | terjadi kegagalan |
+
+Contoh pesan yang muncul di channel:
+
+```
+:floppy_disk: **Backup** `2026-02-28 13:00:00` - mysql dump success
+```
+
+Border berwarna membantu membedakan notifikasi backup dari pesan lain dan tahu apakah sesuatu berhasil atau gagal sekilas.
+
+Ini membantu memantau pekerjaan backup tanpa membuka log lokal.
 
 ## Catatan
 
 - Pastikan kredensial database memiliki izin membuat/menghapus database sementara untuk cek integritas.
-- Jangan commit `google_api.json` ke Git (ditambahkan ke `.gitignore`).
+- Jangan commit `config.json` ke Git (ditambahkan ke `.gitignore`).
 - Jika `mysqldump` atau `mysql` tidak ditemukan, install paket MySQL client.
 
 ## Pengembangan

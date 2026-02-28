@@ -3,6 +3,6 @@ __pycache__/
 *.py[cod]
 
 # Config
-google_api.json
+config.json
 
 temp*.sql
