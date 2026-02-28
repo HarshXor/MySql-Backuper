@@ -26,12 +26,15 @@ def save_config(cfg):
 
 
 def send_discord(cfg, msg, status="info"):
+    # always print to CLI so user sees progress locally
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    formatted = f"[Backup {status.upper()}] {timestamp} - {msg}"
+    print(formatted)
+
     url = cfg.get("discord_webhook", "").strip()
     if not url:
         return
-    # format message with timestamp and a small icon for clarity
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    formatted = f":floppy_disk: **Backup** `{timestamp}` - {msg}"
+    # also send to Discord using embed
     # choose embed color based on status
     colors = {
         "info": 0x3498db,    # blue
@@ -43,7 +46,7 @@ def send_discord(cfg, msg, status="info"):
     payload = {
         "embeds": [
             {
-                "description": formatted,
+                "description": f":floppy_disk: **Backup** `{timestamp}` - {msg}",
                 "color": color,
             }
         ]

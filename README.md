@@ -66,6 +66,8 @@ Warna akan menyesuaikan berdasarkan status pesan:
 | success  | hijau    | operasi sukses   |
 | failure  | merah    | terjadi kegagalan |
 
+Pesan yang sama juga akan dicetak di CLI sehingga Anda dapat melihat langkah‑langkah backup saat dijalankan manual.
+
 Contoh pesan yang muncul di channel:
 
 ```
