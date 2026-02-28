@@ -5,6 +5,10 @@ import argparse
 import webbrowser
 from datetime import datetime
 import sys
+import shutil
+import subprocess
+import tempfile
+import uuid
 
 CONFIG_FILE = "google_api.json"
 
@@ -29,6 +33,11 @@ class GoogleDriveUploader:
         parser.add_argument("--client-secret", required=True)
         parser.add_argument("--folder-id", required=True)
         parser.add_argument("--max-files", type=int, default=3)
+        parser.add_argument("--local-dir", required=True)
+        parser.add_argument("--db-host", required=True)
+        parser.add_argument("--db-user", required=True)
+        parser.add_argument("--db-pass", required=True)
+        parser.add_argument("--db-name", required=True)
 
         args = parser.parse_args()
 
@@ -37,6 +46,11 @@ class GoogleDriveUploader:
             "client_secret": args.client_secret,
             "folder_id": args.folder_id,
             "max_files": args.max_files,
+            "local_dir": args.local_dir,
+            "db_host": args.db_host,
+            "db_user": args.db_user,
+            "db_pass": args.db_pass,
+            "db_name": args.db_name,
             "refresh_token": ""
         }
 
@@ -154,6 +168,75 @@ class GoogleDriveUploader:
         if len(files) >= self.config["max_files"]:
             self.delete_file(files[0]["id"])
 
+    def rotate_local(self):
+        local_dir = self.config["local_dir"]
+        if not os.path.exists(local_dir):
+            os.makedirs(local_dir)
+        files = sorted(os.listdir(local_dir), key=lambda x: os.path.getctime(os.path.join(local_dir, x)))
+        while len(files) >= self.config["max_files"]:
+            os.remove(os.path.join(local_dir, files[0]))
+            print("[+] Deleted local file:", files[0])
+            files.pop(0)
+
+    def save_local(self, file_path):
+        local_dir = self.config["local_dir"]
+        _, ext = os.path.splitext(file_path)
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        new_filename = f"{timestamp}{ext}"
+        dest_path = os.path.join(local_dir, new_filename)
+        shutil.copy2(file_path, dest_path)
+        print("[+] Saved to local:", dest_path)
+
+    def dump_mysql(self):
+        with tempfile.NamedTemporaryFile(mode='w+', suffix='.sql', delete=False) as temp_file:
+            dump_path = temp_file.name
+        cmd = [
+            "mysqldump",
+            "-h", self.config["db_host"],
+            "-u", self.config["db_user"],
+            f"-p{self.config['db_pass']}",
+            self.config["db_name"]
+        ]
+        with open(dump_path, 'w') as f:
+            result = subprocess.run(cmd, stdout=f, stderr=subprocess.PIPE)
+        if result.returncode != 0:
+            print("[-] MySQL dump failed:", result.stderr.decode())
+            os.unlink(dump_path)
+            sys.exit(1)
+        print("[+] MySQL dump created:", dump_path)
+        return dump_path
+
+    def check_sql_integrity(self, dump_path):
+        temp_db = f"temp_check_{uuid.uuid4().hex[:8]}"
+        host = self.config["db_host"]
+        user = self.config["db_user"]
+        passwd = self.config["db_pass"]
+
+        # Create temp database
+        create_cmd = ["mysql", "-h", host, "-u", user, f"-p{passwd}", "-e", f"CREATE DATABASE {temp_db};"]
+        result = subprocess.run(create_cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            print("[-] Failed to create temp database for check:", result.stderr)
+            return
+
+        # Import and check
+        import_cmd = ["mysql", "-h", host, "-u", user, f"-p{passwd}", temp_db]
+        with open(dump_path, 'r') as f:
+            result = subprocess.run(import_cmd, stdin=f, capture_output=True, text=True)
+        if result.returncode != 0:
+            print("[-] SQL file corrupted:", result.stderr)
+            # Drop temp db anyway
+            drop_cmd = ["mysql", "-h", host, "-u", user, f"-p{passwd}", "-e", f"DROP DATABASE IF EXISTS {temp_db};"]
+            subprocess.run(drop_cmd)
+            os.unlink(dump_path)
+            sys.exit(1)
+        else:
+            print("[+] SQL integrity check passed")
+
+        # Drop temp database
+        drop_cmd = ["mysql", "-h", host, "-u", user, f"-p{passwd}", "-e", f"DROP DATABASE {temp_db};"]
+        subprocess.run(drop_cmd)
+
     def upload_file(self, file_path):
         if not os.path.exists(file_path):
             print("[-] File not found:", file_path)
@@ -192,17 +275,19 @@ class GoogleDriveUploader:
 
         print("[+] Upload success:", new_filename)
 
-    def run(self, file_path):
+    def run(self):
         self.ensure_refresh_token()
+        dump_path = self.dump_mysql()
+        self.check_sql_integrity(dump_path)
+        self.rotate_local()
+        self.save_local(dump_path)
         self.access_token = self.get_access_token()
         self.rotate_files()
-        self.upload_file(file_path)
+        self.upload_file(dump_path)
+        os.unlink(dump_path)
+        print("[+] Temporary dump file deleted")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--file", required=True)
-    args, unknown = parser.parse_known_args()
-
     uploader = GoogleDriveUploader()
-    uploader.run(args.file)
+    uploader.run()
